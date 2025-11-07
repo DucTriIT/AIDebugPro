@@ -5,6 +5,7 @@ using Serilog;
 using AIDebugPro.Services.DependencyInjection;
 using AIDebugPro.Services.Configuration;
 using LoggerConfig = AIDebugPro.Services.Logging.LoggerConfiguration;
+using AIDebugPro.Presentation.Forms;
 
 namespace AIDebugPro;
 
@@ -38,7 +39,7 @@ internal static class Program
             _serviceProvider = _host.Services;
 
             // Validate service registration
-            ServiceRegistration.ValidateServiceRegistration(_serviceProvider);
+            ServiceRegistration.ValidateServiceRegistration(_serviceProvider,configuration);
 
             Log.Information("Service registration validated successfully");
 
@@ -47,9 +48,10 @@ internal static class Program
             
             Log.Information("Launching main form...");
 
-            // Get Form1 from DI (or create manually for now)
-            var mainForm = new Form1();
-            
+            //Get MainForm
+            var mainForm = _serviceProvider.GetRequiredService<MainForm>();
+
+
             Application.Run(mainForm);
 
             Log.Information("Application shutdown completed");
@@ -103,8 +105,6 @@ internal static class Program
                 // Configure strongly-typed settings
                 services.ConfigureAppSettings(configuration);
 
-                // Register the main form (optional)
-                services.AddTransient<Form1>();
             });
     }
 

@@ -5,7 +5,14 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using AIDebugPro.Core.Interfaces;
+using AIDebugPro.Core.Constants;
+using System.IO;
+using AIDebugPro.BrowserIntegration.DevToolsProtocol;
+using AIDebugPro.Core.Exceptions;
+using AIDebugPro.Presentation.ViewModels;
+using AIDebugPro.Presentation.UserControls;
 
 namespace AIDebugPro.Services.DependencyInjection;
 
@@ -33,11 +40,11 @@ public static class ServiceRegistration
         // Register data orchestration services
         services.AddDataOrchestrationServices();
 
-        // Register AI integration services
-        services.AddAIIntegrationServices(configuration);
-
         // Register persistence services
         services.AddPersistenceServices(configuration);
+
+        // Register AI integration services
+        services.AddAIIntegrationServices(configuration);
 
         // Register infrastructure services
         services.AddInfrastructureServices();
@@ -53,7 +60,6 @@ public static class ServiceRegistration
         // Core layer typically only contains models, interfaces, and contracts
         // No concrete implementations to register here
         // Implementations will be registered in their respective layers
-
         return services;
     }
 
@@ -66,16 +72,17 @@ public static class ServiceRegistration
         // services.AddSingleton<IWebView2Host, WebView2Host>();
 
         // CDP Listeners - Scoped for each session
-        // services.AddScoped<IConsoleListener, ConsoleListener>();
-        // services.AddScoped<INetworkListener, NetworkListener>();
-        // services.AddScoped<IPerformanceCollector, PerformanceCollector>();
-        // services.AddScoped<IDOMSnapshotManager, DOMSnapshotManager>();
+        services.AddScoped<IConsoleListener, ConsoleListener>();
+        services.AddScoped<INetworkListener, NetworkListener>();
+        services.AddScoped<IPerformanceCollector, PerformanceCollector>();
+        services.AddScoped<IDOMSnapshotManager, DOMSnapshotManager>();
+
 
         // Script Executor
-        // services.AddScoped<IScriptExecutor, ScriptExecutor>();
+        //services.AddScoped<IScriptExecutor, ScriptExecutor>();
 
         // Event Processor
-        // services.AddScoped<IEventProcessor, EventProcessor>();
+        //services.AddScoped<IEventProcessor, EventProcessor>();
 
         return services;
     }
@@ -104,34 +111,31 @@ public static class ServiceRegistration
     }
 
     /// <summary>
-    /// Registers AI integration services (OpenAI, Local LLM)
+    /// Registers AI integration services (OpenAI, Prompts, Parsing)
     /// </summary>
     private static IServiceCollection AddAIIntegrationServices(
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // AI Client Factory
-        // services.AddSingleton<IAIClientFactory, AIClientFactory>();
+        // Get OpenAI API key from configuration
+        var apiKey = configuration[ConfigurationKeys.OpenAIApiKey];
 
-        // OpenAI Client - Singleton with configuration
-        // services.AddSingleton<IAIClient, OpenAIClient>(sp =>
-        // {
-        //     var apiKey = configuration["OpenAI:ApiKey"];
-        //     var model = configuration["OpenAI:Model"] ?? "gpt-4";
-        //     return new OpenAIClient(apiKey, model);
-        // });
+        // AI Client - Scoped for per-request usage
+        services.AddScoped<AIIntegration.Interfaces.IAIClient>(sp =>
+        {
+            var contextBuilder = sp.GetRequiredService<IContextBuilder>();
+            var logger = sp.GetService<ILogger<AIIntegration.Clients.OpenAIClient>>();
+            return new AIIntegration.Clients.OpenAIClient(apiKey, contextBuilder, logger);
+        });
 
-        // Local LLM Client (if configured)
-        // services.AddSingleton<ILocalLLMClient, LocalLLMClient>();
+        // Prompt Composer - Scoped
+        services.AddScoped<AIIntegration.PromptComposer>();
 
-        // Prompt Composer
-        // services.AddScoped<IPromptComposer, PromptComposer>();
+        // Response Parser - Scoped
+        services.AddScoped<AIIntegration.ResponseParser>();
 
-        // Response Parser
-        // services.AddScoped<IResponseParser, ResponseParser>();
-
-        // Token Manager for caching and limiting
-        // services.AddSingleton<ITokenManager, TokenManager>();
+        // Token Manager - Singleton for caching
+        services.AddSingleton<AIIntegration.TokenManager>();
 
         return services;
     }
@@ -144,16 +148,20 @@ public static class ServiceRegistration
         IConfiguration configuration)
     {
         // Database Context - Singleton for LiteDB
-        // var dbPath = configuration["Database:Path"] ?? "data/aidebugpro.db";
-        // services.AddSingleton<IAppDbContext>(sp => new AppDbContext(dbPath));
+        var dbPath = configuration["Database:Path"] ?? Path.Combine("data", "aidebugpro.db");
+        services.AddSingleton<Persistence.Database.AppDbContext>(sp =>
+        {
+            var logger = sp.GetService<ILogger<Persistence.Database.AppDbContext>>();
+            return new Persistence.Database.AppDbContext(dbPath, logger);
+        });
 
         // Repositories - Scoped for each request/session
-        // services.AddScoped<ISessionRepository, SessionRepository>();
-        // services.AddScoped<ILogRepository, LogRepository>();
-        // services.AddScoped<ISettingsRepository, SettingsRepository>();
+        services.AddScoped<Persistence.Repositories.SessionRepository>();
+        services.AddScoped<Persistence.Repositories.LogRepository>();
+        services.AddScoped<Persistence.Repositories.SettingsRepository>();
 
         // Report Generator
-        // services.AddScoped<IReportGenerator, ReportGenerator>();
+        services.AddScoped<Persistence.ReportGenerator>();
 
         return services;
     }
@@ -170,9 +178,11 @@ public static class ServiceRegistration
         // Background Task Service (hosted service) - Automatically starts/stops with application
         services.AddHostedService<BackgroundTasks.BackgroundTaskService>();
 
-        // Utility Services
-        // services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
-        // services.AddSingleton<IFileSystemService, FileSystemService>();
+        // Utility Services - Singleton for application-wide utilities
+        services.AddSingleton<Utilities.IDateTimeProvider, Utilities.DateTimeProvider>();
+        
+        // Event Aggregator - Singleton for application-wide events
+        services.AddSingleton<Utilities.EventAggregator>();
 
         return services;
     }
@@ -182,14 +192,17 @@ public static class ServiceRegistration
     /// </summary>
     public static IServiceCollection AddViewModels(this IServiceCollection services)
     {
+        // Main Form ✅ ADDED
+        services.AddTransient<Presentation.Forms.MainForm>();
+
         // Main View Model
-        // services.AddTransient<MainViewModel>();
+        services.AddTransient<MainViewModel>();
 
         // AI Assistant View Model
-        // services.AddTransient<AIAssistantViewModel>();
+        services.AddTransient<AIAssistantViewModel>();
 
         // Other view models as needed
-        // services.AddTransient<LogsDashboardViewModel>();
+        services.AddTransient<LogsDashboard>();
 
         return services;
     }
@@ -202,7 +215,7 @@ public static class ServiceRegistration
         IConfiguration configuration)
     {
         // Bind configuration sections to strongly-typed options
-        // services.Configure<OpenAISettings>(configuration.GetSection("OpenAI"));
+        //services.Configure<OpenAISettings>(configuration.GetSection("OpenAI"));
         // services.Configure<DatabaseSettings>(configuration.GetSection("Database"));
         // services.Configure<TelemetrySettings>(configuration.GetSection("Telemetry"));
         // services.Configure<LoggingSettings>(configuration.GetSection("Logging"));
@@ -213,22 +226,22 @@ public static class ServiceRegistration
     /// <summary>
     /// Validates that required services are registered
     /// </summary>
-    public static void ValidateServiceRegistration(IServiceProvider serviceProvider)
+    public static void ValidateServiceRegistration(IServiceProvider serviceProvider, IConfiguration configuration)
     {
         // Validate critical services are registered
         // This helps catch configuration issues early
 
         // Example validations:
-        // _ = serviceProvider.GetRequiredService<ISessionManager>();
-        // _ = serviceProvider.GetRequiredService<ITelemetryAggregator>();
-        // _ = serviceProvider.GetRequiredService<IContextBuilder>();
+        _ = serviceProvider.GetRequiredService<ISessionManager>();
+        _ = serviceProvider.GetRequiredService<ITelemetryAggregator>();
+        _ = serviceProvider.GetRequiredService<IContextBuilder>();
 
         // Validate configuration
-        // var config = serviceProvider.GetRequiredService<IConfiguration>();
-        // if (string.IsNullOrEmpty(config["OpenAI:ApiKey"]))
-        // {
-        //     throw new ConfigurationException("OpenAI API Key is not configured");
-        // }
+        var apiKey = configuration[ConfigurationKeys.OpenAIApiKey];
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            throw new ConfigurationException("OpenAI API Key is not configured", ConfigurationKeys.OpenAIApiKey);
+        }
     }
 }
 
