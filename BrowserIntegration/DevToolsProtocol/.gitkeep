@@ -1,0 +1,3 @@
+# DevToolsProtocol Directory
+
+Contains CDP listeners and event handlers for console, network, performance, and DOM.

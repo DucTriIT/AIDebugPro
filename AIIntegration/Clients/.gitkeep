@@ -1,0 +1,3 @@
+# Clients Directory
+
+Contains concrete implementations of IAIClient for different providers.
