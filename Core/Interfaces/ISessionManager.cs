@@ -76,4 +76,9 @@ public interface ISessionManager
     /// Exports session data
     /// </summary>
     Task<string> ExportSessionAsync(Guid sessionId, ReportFormat format);
+
+    /// <summary>
+    /// Imports a session from external source (e.g., loaded from file)
+    /// </summary>
+    Task<DebugSession> ImportSessionAsync(DebugSession session);
 }

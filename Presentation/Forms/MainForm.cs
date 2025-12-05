@@ -7,6 +7,7 @@ using AIDebugPro.BrowserIntegration;
 using AIDebugPro.Services.Utilities;
 using AIDebugPro.AIIntegration;
 using AIDebugPro.AIIntegration.Models;
+using System.Text.Json;
 
 namespace AIDebugPro.Presentation.Forms;
 
@@ -499,9 +500,95 @@ public partial class MainForm : Form
         }
     }
 
-    private void OnOpenSession(object? sender, EventArgs e)
+    private async void OnOpenSession(object? sender, EventArgs e)
     {
-        MessageBox.Show("Open Session feature coming soon!", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        try
+        {
+            // Check if there's an active session
+            if (_currentSessionId.HasValue && _viewModel.IsCapturing)
+            {
+                var result = MessageBox.Show(
+                    "There is an active capture session. Do you want to stop it before opening a saved session?",
+                    "Active Session",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (result == DialogResult.No)
+                    return;
+
+                await StopCaptureAsync();
+            }
+
+            var dialog = new OpenFileDialog
+            {
+                Filter = "AIDebugPro Session (*.aidp)|*.aidp|JSON Session (*.json)|*.json|All Files (*.*)|*.*",
+                DefaultExt = "aidp",
+                Title = "Open Session"
+            };
+
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                UpdateStatus("Loading session...");
+                ShowProgress(true);
+
+                _logger?.LogInformation("📂 Loading session from file {FileName}", dialog.FileName);
+
+                // Read and deserialize session
+                var json = await File.ReadAllTextAsync(dialog.FileName);
+                var session = JsonSerializer.Deserialize<DebugSession>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (session == null)
+                {
+                    throw new InvalidOperationException("Failed to deserialize session");
+                }
+
+                _logger?.LogInformation("✅ Session loaded: {SessionName} with {Snapshots} snapshots, {Analyses} analyses",
+                    session.Name, session.Snapshots.Count, session.AnalysisResults.Count);
+
+                // Import session to session manager (creates new ID and adds to collection)
+                session = await _sessionManager.ImportSessionAsync(session);
+
+                // Set as current session
+                _currentSessionId = session.Id;
+
+                // Update UI
+                UpdateSessionIndicator($"Session: {session.Name} (Loaded)");
+                UpdateStatus("Session loaded successfully");
+                ShowProgress(false);
+
+                // Set AI panel context
+                _aiAssistantPanel?.SetContext(session.Id, ActiveTab.Console);
+
+                _logger?.LogInformation("✅ Session imported with new ID: {SessionId}", session.Id);
+
+                // Show summary
+                var summaryMessage = $"Session Loaded Successfully!\n\n" +
+                    $"Name: {session.Name}\n" +
+                    $"URL: {session.Url}\n" +
+                    $"Started: {session.StartedAt:yyyy-MM-dd HH:mm}\n" +
+                    $"Snapshots: {session.Snapshots.Count}\n" +
+                    $"AI Analyses: {session.AnalysisResults.Count}\n" +
+                    $"Console Errors: {session.Statistics.TotalConsoleErrors}\n" +
+                    $"Network Requests: {session.Statistics.TotalNetworkRequests}\n\n" +
+                    $"Note: This is a read-only view of the saved session.";
+
+                MessageBox.Show(summaryMessage, "Session Loaded", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                // TODO: Display loaded telemetry data in the dashboard
+                // For now, the data is loaded but not displayed in the UI
+                // This would require enhancing LogsDashboard to display historical data
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "❌ Error loading session");
+            ShowError("Failed to load session", ex);
+            ShowProgress(false);
+        }
     }
 
     private async void OnSaveSession(object? sender, EventArgs e)
@@ -511,7 +598,75 @@ public partial class MainForm : Form
             MessageBox.Show("No active session to save", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        await SaveCurrentSessionAsync();
+        
+        try
+        {
+            var dialog = new SaveFileDialog
+            {
+                Filter = "AIDebugPro Session (*.aidp)|*.aidp|JSON Session (*.json)|*.json",
+                DefaultExt = "aidp",
+                FileName = $"Session_{DateTime.Now:yyyyMMdd_HHmmss}"
+            };
+
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                UpdateStatus("Saving session...");
+                ShowProgress(true);
+
+                _logger?.LogInformation("💾 Saving session {SessionId} to file {FileName}", 
+                    _currentSessionId, dialog.FileName);
+
+                // Get the current session with all data
+                var session = await _sessionManager.GetSessionAsync(_currentSessionId.Value);
+                
+                if (session == null)
+                {
+                    throw new InvalidOperationException("Session not found");
+                }
+
+                // Create final snapshot before saving if capturing
+                if (_viewModel.IsCapturing)
+                {
+                    _logger?.LogInformation("Creating final snapshot before saving...");
+                    var snapshot = await _telemetryAggregator.CreateSnapshotAsync(_currentSessionId.Value);
+                    await _sessionManager.AddSnapshotAsync(_currentSessionId.Value, snapshot);
+                    
+                    // Refresh session data
+                    session = await _sessionManager.GetSessionAsync(_currentSessionId.Value);
+                }
+
+                // Serialize session to JSON
+                var json = JsonSerializer.Serialize(session, new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+                });
+
+                // Save to file
+                await File.WriteAllTextAsync(dialog.FileName, json);
+
+                UpdateStatus($"Session saved to {dialog.FileName}");
+                ShowProgress(false);
+
+                _logger?.LogInformation("✅ Session saved successfully: {Snapshots} snapshots, {Analyses} analyses",
+                    session.Snapshots.Count, session.AnalysisResults.Count);
+
+                MessageBox.Show(
+                    $"Session saved successfully!\n\n" +
+                    $"Snapshots: {session.Snapshots.Count}\n" +
+                    $"AI Analyses: {session.AnalysisResults.Count}\n" +
+                    $"File: {Path.GetFileName(dialog.FileName)}",
+                    "Session Saved",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "❌ Error saving session");
+            ShowError("Failed to save session", ex);
+            ShowProgress(false);
+        }
     }
 
     private async void OnExportReport(object? sender, EventArgs e)
@@ -535,10 +690,44 @@ public partial class MainForm : Form
             {
                 UpdateStatus("Generating report...");
                 ShowProgress(true);
-                await Task.Delay(1000);
+
+                // Determine format based on file extension
+                var format = Path.GetExtension(dialog.FileName).ToLowerInvariant() switch
+                {
+                    ".html" => ReportFormat.HTML,
+                    ".md" => ReportFormat.Markdown,
+                    ".json" => ReportFormat.JSON,
+                    _ => ReportFormat.HTML
+                };
+
+                _logger?.LogInformation("Exporting session {SessionId} as {Format}", _currentSessionId, format);
+
+                // Generate the report content
+                var reportContent = await _sessionManager.ExportSessionAsync(_currentSessionId.Value, format);
+
+                // Write to file
+                await File.WriteAllTextAsync(dialog.FileName, reportContent);
+
                 UpdateStatus($"Report exported to {dialog.FileName}");
                 ShowProgress(false);
-                MessageBox.Show("Report exported successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                _logger?.LogInformation("Report successfully exported to {FileName}", dialog.FileName);
+
+                // Ask if user wants to open the report
+                var result = MessageBox.Show(
+                    $"Report exported successfully!\n\nDo you want to open it now?",
+                    "Export Complete",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+
+                if (result == DialogResult.Yes)
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = dialog.FileName,
+                        UseShellExecute = true
+                    });
+                }
             }
         }
         catch (Exception ex)
@@ -564,15 +753,119 @@ public partial class MainForm : Form
         {
             UpdateStatus("Analyzing with AI...");
             ShowProgress(true);
-            await Task.Delay(2000);
+
+            _logger?.LogInformation("🤖 Starting AI analysis for session {SessionId}", _currentSessionId);
+
+            // ✅ Step 1: Create snapshot of current telemetry data
+            _logger?.LogInformation("📸 Creating snapshot for AI analysis...");
+            var snapshot = await _telemetryAggregator.CreateSnapshotAsync(_currentSessionId.Value);
+            await _sessionManager.AddSnapshotAsync(_currentSessionId.Value, snapshot);
+            
+            _logger?.LogInformation("✅ Snapshot created: {Console} console messages, {Network} network requests",
+                snapshot.ConsoleMessages.Count, snapshot.NetworkRequests.Count);
+
+            // ✅ Step 2: Build telemetry context for AI
+            _logger?.LogInformation("🔨 Building telemetry context...");
+            var context = await _contextBuilder!.BuildContextAsync(
+                _currentSessionId.Value,
+                ActiveTab.Console, // Focus on console errors
+                _webViewPanel?.CurrentUrl);
+
+            _logger?.LogInformation("✅ Context built: {Errors} errors, {Warnings} warnings, {FailedRequests} failed requests",
+                context.RecentConsoleMessages.Count(m => m.Level == ConsoleMessageLevel.Error),
+                context.RecentConsoleMessages.Count(m => m.Level == ConsoleMessageLevel.Warning),
+                context.RecentNetworkRequests.Count(r => r.IsFailed));
+
+            // ✅ Step 3: Perform AI analysis
+            _logger?.LogInformation("🤖 Calling AI to analyze session...");
+            var aiResponse = await _aiAssistant!.AnalyzeSessionAsync(_currentSessionId.Value, context);
+
+            _logger?.LogInformation("✅ AI analysis complete: Severity={Severity}, Recommendations={Count}",
+                aiResponse.Severity, aiResponse.RecommendedFixes.Count);
+
+            // ✅ Step 4: Convert AIDebugResponse to AIAnalysisResult and save to session
+            var analysisResult = new AIAnalysisResult
+            {
+                Id = Guid.NewGuid(),
+                SessionId = _currentSessionId.Value,
+                AnalyzedAt = DateTime.UtcNow,
+                Model = "gpt-4", // TODO: Get from configuration
+                Status = AIAnalysisStatus.Completed,
+                Summary = aiResponse.Message,
+                Issues = aiResponse.RelatedTelemetryIds.Select(id =>
+                {
+                    // Find the actual console message or network request
+                    var consoleMsg = snapshot.ConsoleMessages.FirstOrDefault(m => m.Id == id);
+                    if (consoleMsg != null)
+                    {
+                        return new Issue
+                        {
+                            Id = Guid.NewGuid(),
+                            Title = $"{consoleMsg.Level}: {consoleMsg.Message.Truncate(50)}",
+                            Description = consoleMsg.Message,
+                            Severity = consoleMsg.Level == ConsoleMessageLevel.Error ? IssueSeverity.High : IssueSeverity.Medium,
+                            Source = consoleMsg.Source,
+                            LineNumber = consoleMsg.LineNumber,
+                            Category = IssueCategory.JavaScriptError,
+                            CodeSnippet = consoleMsg.StackTrace
+                        };
+                    }
+
+                    var networkReq = snapshot.NetworkRequests.FirstOrDefault(r => r.Id == id);
+                    if (networkReq != null)
+                    {
+                        return new Issue
+                        {
+                            Id = Guid.NewGuid(),
+                            Title = $"Network {networkReq.StatusCode}: {networkReq.Url?.Truncate(50)}",
+                            Description = networkReq.ErrorText ?? $"Request failed with status {networkReq.StatusCode}",
+                            Severity = IssueSeverity.High,
+                            Source = networkReq.Url,
+                            Category = IssueCategory.NetworkError,
+                            RelatedUrls = new List<string> { networkReq.Url ?? "Unknown" }
+                        };
+                    }
+
+                    return null;
+                }).Where(i => i != null).Cast<Issue>().ToList(),
+                Recommendations = aiResponse.RecommendedFixes.Select((fix, index) => new Recommendation
+                {
+                    Id = Guid.NewGuid(),
+                    Title = $"Fix #{index + 1}",
+                    Description = fix,
+                    Priority = index == 0 ? RecommendationPriority.High : RecommendationPriority.Medium,
+                    Type = RecommendationType.ErrorHandling,
+                    ExpectedImpact = "Resolves identified issues"
+                }).ToList()
+            };
+
+            // Save analysis to session
+            await _sessionManager.AddAnalysisResultAsync(_currentSessionId.Value, analysisResult);
+            
+            _logger?.LogInformation("💾 AI analysis saved to session with {IssueCount} issues and {RecCount} recommendations",
+                analysisResult.Issues.Count, analysisResult.Recommendations.Count);
+
+            // ✅ Step 5: Display results in AI Assistant panel
+            _aiAssistantPanel?.ShowAnalysis(aiResponse);
+
             UpdateStatus("AI analysis complete");
             ShowProgress(false);
-            MessageBox.Show("AI analysis complete! Check the AI Assistant panel for results.", 
-                "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            // Show summary
+            var summaryMessage = $"AI Analysis Complete!\n\n" +
+                $"Severity: {aiResponse.Severity}\n" +
+                $"Issues Found: {analysisResult.Issues.Count}\n" +
+                $"Recommendations: {analysisResult.Recommendations.Count}\n\n" +
+                $"Check the AI Assistant panel for detailed results.";
+
+            MessageBox.Show(summaryMessage, "AI Analysis Complete", 
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            _logger?.LogInformation("✅ AI analysis workflow completed successfully");
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Error during AI analysis");
+            _logger?.LogError(ex, "❌ Error during AI analysis");
             ShowError("AI analysis failed", ex);
             ShowProgress(false);
         }
@@ -740,6 +1033,24 @@ public partial class MainForm : Form
             
             _viewModel.IsCapturing = false;
             
+            // ✅ CREATE FINAL SNAPSHOT before ending session
+            try
+            {
+                _logger?.LogInformation("Creating final snapshot for session {SessionId}", _currentSessionId);
+                var snapshot = await _telemetryAggregator.CreateSnapshotAsync(_currentSessionId.Value);
+                await _sessionManager.AddSnapshotAsync(_currentSessionId.Value, snapshot);
+                
+                _logger?.LogInformation(
+                    "✅ Session snapshot saved: {Console} console messages, {Network} network requests, {Performance} performance metrics",
+                    snapshot.ConsoleMessages.Count,
+                    snapshot.NetworkRequests.Count,
+                    snapshot.PerformanceMetrics.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to create snapshot, but continuing to end session");
+            }
+            
             // Only end session if it's still active
             var session = await _sessionManager.GetSessionAsync(_currentSessionId.Value);
             if (session != null && session.Status == SessionStatus.Active)
@@ -747,7 +1058,7 @@ public partial class MainForm : Form
                 await _sessionManager.EndSessionAsync(_currentSessionId.Value);
             }
             
-            UpdateStatus("Capture stopped");
+            UpdateStatus("Capture stopped - Session snapshot saved");
             _logger?.LogInformation("Capture stopped for session {SessionId}", _currentSessionId);
         }
         catch (Exception ex)

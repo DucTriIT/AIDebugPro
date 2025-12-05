@@ -14,6 +14,7 @@ public class PerformanceCollector : IPerformanceCollector, IDisposable
     private readonly CoreWebView2 _coreWebView;
     private readonly ITelemetryAggregator _telemetryAggregator;
     private readonly ILogger? _logger;
+    private readonly SynchronizationContext? _uiContext;
     private Guid _currentSessionId;
     private bool _isCollecting;
     private System.Threading.Timer? _collectTimer;
@@ -26,11 +27,14 @@ public class PerformanceCollector : IPerformanceCollector, IDisposable
         _coreWebView = coreWebView ?? throw new ArgumentNullException(nameof(coreWebView));
         _telemetryAggregator = telemetryAggregator ?? throw new ArgumentNullException(nameof(telemetryAggregator));
         _logger = logger;
+        
+        // Capture the current synchronization context (should be UI thread)
+        _uiContext = SynchronizationContext.Current;
     }
 
     /// <summary>
     /// Starts collecting performance metrics
-    /// </summary>
+    /// /// </summary>
     public async Task StartAsync(Guid sessionId)
     {
         if (_isCollecting)
@@ -48,10 +52,32 @@ public class PerformanceCollector : IPerformanceCollector, IDisposable
 
             // Start periodic collection (every 5 seconds)
             _collectTimer = new System.Threading.Timer(
-                async _ => await CollectMetricsAsync(_currentSessionId),
+                _ => 
+                {
+                    // Marshal the call to the UI thread
+                    if (_uiContext != null)
+                    {
+                        _uiContext.Post(async state => 
+                        {
+                            try
+                            {
+                                await CollectMetricsAsync(_currentSessionId);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.LogError(ex, "Error in timer callback");
+                            }
+                        }, null);
+                    }
+                    else
+                    {
+                        _logger?.LogWarning("SynchronizationContext not available, skipping metric collection");
+                    }
+                },
                 null,
                 TimeSpan.FromSeconds(2),
                 TimeSpan.FromSeconds(5));
+
 
             _isCollecting = true;
             _logger?.LogInformation("PerformanceCollector started for session {SessionId}", sessionId);

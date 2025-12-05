@@ -375,12 +375,15 @@ namespace AIDebugPro.DataOrchestration
         /// <summary>
         /// Exports session data
         /// </summary>
-        public Task<string> ExportSessionAsync(Guid sessionId, ReportFormat format)
+        public async Task<string> ExportSessionAsync(Guid sessionId, ReportFormat format)
         {
             if (!_sessions.TryGetValue(sessionId, out var session))
             {
                 throw new SessionNotFoundException(sessionId);
             }
+
+            // Recalculate statistics from snapshots
+            RecalculateStatistics(session);
 
             string exportedData = format switch
             {
@@ -392,11 +395,64 @@ namespace AIDebugPro.DataOrchestration
             };
 
             _logger?.LogInformation(
-                "Exported session {SessionId} as {Format}",
+                "Exported session {SessionId} as {Format} with {SnapshotCount} snapshots",
                 sessionId,
-                format);
+                format,
+                session.Snapshots.Count);
 
-            return Task.FromResult(exportedData);
+            return exportedData;
+        }
+
+        /// <summary>
+        /// Imports a session from external source (e.g., loaded from file)
+        /// </summary>
+        public async Task<DebugSession> ImportSessionAsync(DebugSession session)
+        {
+            if (session == null)
+                throw new ArgumentNullException(nameof(session));
+
+            await _semaphore.WaitAsync();
+            try
+            {
+                // Generate a new ID to avoid conflicts
+                var originalId = session.Id;
+                session.Id = Guid.NewGuid();
+                session.Status = SessionStatus.Completed; // Mark as archived/completed
+
+                // Update all related IDs in snapshots
+                foreach (var snapshot in session.Snapshots)
+                {
+                    snapshot.SessionId = session.Id;
+                }
+
+                // Update all related IDs in analysis results
+                foreach (var analysis in session.AnalysisResults)
+                {
+                    analysis.SessionId = session.Id;
+                }
+
+                // Add to sessions dictionary
+                if (!_sessions.TryAdd(session.Id, session))
+                {
+                    throw new InvalidSessionOperationException(
+                        session.Id,
+                        "Failed to import session - ID conflict");
+                }
+
+                _logger?.LogInformation(
+                    "Imported session {OriginalId} as {NewId}: {Name} with {Snapshots} snapshots, {Analyses} analyses",
+                    originalId,
+                    session.Id,
+                    session.Name,
+                    session.Snapshots.Count,
+                    session.AnalysisResults.Count);
+
+                return session;
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         }
 
         #region Private Helper Methods

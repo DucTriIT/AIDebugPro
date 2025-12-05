@@ -156,11 +156,9 @@ public class NetworkListener : INetworkListener,IDisposable
                 builder.RequestBody = postData.GetString();
             }
 
-            // Get timestamp
-            if (root.TryGetProperty("timestamp", out var timestamp))
-            {
-                builder.Timestamp = DateTimeOffset.FromUnixTimeSeconds((long)timestamp.GetDouble()).UtcDateTime;
-            }
+            // Get timestamp - CDP uses monotonic time in seconds since process start
+            // We should use current UTC time instead for consistency
+            builder.Timestamp = DateTime.UtcNow;
 
             _requests[requestId] = builder;
 
