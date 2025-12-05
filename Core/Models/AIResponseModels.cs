@@ -104,13 +104,13 @@ namespace AIDebugPro.Core.Models
     /// </summary>
     public class AIAnalysisOptions
     {
-        public string Model { get; set; } = "gpt-4";
+        public string Model { get; set; } = "gpt-3.5-turbo"; // Changed from gpt-4
         public bool AnalyzeErrors { get; set; } = true;
         public bool AnalyzePerformance { get; set; } = true;
         public bool AnalyzeNetworkIssues { get; set; } = true;
         public bool ProvideFixes { get; set; } = true;
         public bool IncludeCodeSnippets { get; set; } = true;
-        public int MaxTokens { get; set; } = 4000;
+        public int MaxTokens { get; set; } = 2000; // Reduced from 4000 for gpt-3.5-turbo
         public double Temperature { get; set; } = 0.7;
     }
 

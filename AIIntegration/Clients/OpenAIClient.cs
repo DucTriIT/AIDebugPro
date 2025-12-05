@@ -87,8 +87,41 @@ public class OpenAIClient : IAIClient
             {
                 _logger?.LogError("OpenAI API error: {StatusCode} - {Response}",
                     response.StatusCode, responseText);
+                
+                // Parse error details
+                string errorMessage = $"OpenAI API error: {response.StatusCode}";
+                try
+                {
+                    var errorResponse = JsonSerializer.Deserialize<JsonDocument>(responseText);
+                    if (errorResponse != null && errorResponse.RootElement.TryGetProperty("error", out var error))
+                    {
+                        if (error.TryGetProperty("message", out var message))
+                        {
+                            errorMessage = $"OpenAI API error: {message.GetString()}";
+                        }
+                    }
+                }
+                catch { }
+                
+                // Provide helpful messages for common errors
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    errorMessage += "\n\n?? This usually means:\n" +
+                        "- The model 'gpt-4' doesn't exist or you don't have access to it\n" +
+                        "- Try changing the model to 'gpt-3.5-turbo' in appsettings.json\n" +
+                        "- Or check if your OpenAI account has GPT-4 API access";
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    errorMessage += "\n\n?? Your API key is invalid or expired";
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    errorMessage += "\n\n?? Rate limit exceeded. Wait a moment and try again";
+                }
+                
                 throw new AIAnalysisException(
-                    $"OpenAI API error: {response.StatusCode}",
+                    errorMessage,
                     options.Model,
                     0);
             }
