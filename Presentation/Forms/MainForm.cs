@@ -240,14 +240,43 @@ public partial class MainForm : Form
             _aiAssistantPanel.MessageSent += OnAIMessageSent;
         }
 
+        // ⭐ NEW: Wire up logs dashboard
+        if (_logsDashboard != null)
+        {
+            _logsDashboard.OnAskAIRequested += OnAskAIRequested;
+        }
+
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+    }
+
+    // ⭐ NEW: Handle AI request from context menu
+    private void OnAskAIRequested(object? sender, AIRequestEventArgs e)
+    {
+        _logger?.LogInformation("AI request from context menu: {Query}", e.DefaultQuery);
+
+        // Set context based on item type
+        var tab = e.ItemType switch
+        {
+            "Console" => ActiveTab.Console,
+            "Network" => ActiveTab.Network,
+            "Performance" => ActiveTab.Performance,
+            _ => ActiveTab.Console
+        };
+
+        // Set AI panel context
+        _aiAssistantPanel?.SetContext(_currentSessionId ?? Guid.Empty, tab);
+
+        // Auto-populate query in AI panel
+        _aiAssistantPanel?.SetQuery(e.DefaultQuery);
+
+        // TODO: Switch to AI Assistant panel tab
     }
 
     // ⭐ NEW: Handle highlight request from AI
     private void OnHighlightTelemetryItems(object? sender, List<Guid> ids)
     {
-        // TODO: Implement highlighting in LogsDashboard
-        _logger?.LogInformation("AI requested highlighting {Count} telemetry items", ids.Count);
+        _logsDashboard?.HighlightItems(ids);
+        _logger?.LogInformation("Highlighted {Count} telemetry items", ids.Count);
     }
 
     private async void MainForm_Load(object? sender, EventArgs e)

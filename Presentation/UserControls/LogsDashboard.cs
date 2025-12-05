@@ -1,4 +1,5 @@
 using AIDebugPro.Core.Models;
+using AIDebugPro.AIIntegration.Models;
 
 namespace AIDebugPro.Presentation.UserControls;
 
@@ -16,6 +17,9 @@ public partial class LogsDashboard : UserControl
     private Label? _lcpLabel;
     private Label? _memoryLabel;
     private Label? _domNodesLabel;
+
+    // ? NEW: Events for AI integration
+    public event EventHandler<AIRequestEventArgs>? OnAskAIRequested;
 
     public LogsDashboard()
     {
@@ -69,6 +73,14 @@ public partial class LogsDashboard : UserControl
         listView.Columns.Add("Source", 200);
         listView.Columns.Add("Line", 60);
 
+        // ? NEW: Add context menu
+        var contextMenu = new ContextMenuStrip();
+        contextMenu.Items.Add("?? Ask AI about this error", null, OnAskAIAboutError);
+        contextMenu.Items.Add("?? Explain this message", null, OnExplainMessage);
+        contextMenu.Items.Add("?? Copy message", null, OnCopyConsoleMessage);
+        
+        listView.ContextMenuStrip = contextMenu;
+
         return listView;
     }
 
@@ -88,6 +100,14 @@ public partial class LogsDashboard : UserControl
         listView.Columns.Add("Duration", 80);
         listView.Columns.Add("Size", 80);
         listView.Columns.Add("Type", 100);
+
+        // ? NEW: Add context menu
+        var contextMenu = new ContextMenuStrip();
+        contextMenu.Items.Add("?? Analyze this request", null, OnAnalyzeNetworkRequest);
+        contextMenu.Items.Add("?? Why did this fail?", null, OnAnalyzeNetworkFailure);
+        contextMenu.Items.Add("?? Copy URL", null, OnCopyURL);
+        
+        listView.ContextMenuStrip = contextMenu;
 
         return listView;
     }
@@ -229,116 +249,94 @@ public partial class LogsDashboard : UserControl
             _tabControl.SelectedIndex = 2;
     }
 
-    public void AddConsoleMessage(ConsoleMessage message)
+    // ? NEW: Context menu handlers
+    private void OnAskAIAboutError(object? sender, EventArgs e)
     {
-        if (InvokeRequired)
+        var selected = GetSelectedConsoleMessage();
+        if (selected == null) return;
+
+        OnAskAIRequested?.Invoke(this, new AIRequestEventArgs
         {
-            Invoke(() => AddConsoleMessage(message));
-            return;
-        }
+            TelemetryItem = selected,
+            DefaultQuery = $"Explain this error: {selected.Message.Substring(0, Math.Min(100, selected.Message.Length))}",
+            ItemType = "Console"
+        });
+    }
 
-        if (_consoleListView == null)
-            return;
+    private void OnExplainMessage(object? sender, EventArgs e)
+    {
+        var selected = GetSelectedConsoleMessage();
+        if (selected == null) return;
 
-        var item = new ListViewItem(message.Timestamp.ToString("HH:mm:ss.fff"));
-        item.SubItems.Add(message.Level.ToString());
-        item.SubItems.Add(message.Message);
-        item.SubItems.Add(message.Source ?? "");
-        item.SubItems.Add(message.LineNumber.ToString());
-
-        // Color code by level
-        item.BackColor = message.Level switch
+        OnAskAIRequested?.Invoke(this, new AIRequestEventArgs
         {
-            ConsoleMessageLevel.Error => Color.LightPink,
-            ConsoleMessageLevel.Warning => Color.LightYellow,
-            ConsoleMessageLevel.Info => Color.LightCyan,
-            _ => Color.White
-        };
+            TelemetryItem = selected,
+            DefaultQuery = $"What does this console message mean? {selected.Message}",
+            ItemType = "Console"
+        });
+    }
 
-        _consoleListView.Items.Insert(0, item);
-
-        // Limit to 1000 items
-        while (_consoleListView.Items.Count > 1000)
+    private void OnCopyConsoleMessage(object? sender, EventArgs e)
+    {
+        var selected = GetSelectedConsoleMessage();
+        if (selected != null && !string.IsNullOrEmpty(selected.Message))
         {
-            _consoleListView.Items.RemoveAt(_consoleListView.Items.Count - 1);
+            Clipboard.SetText(selected.Message);
         }
     }
 
-    public void AddNetworkRequest(NetworkRequest request)
+    private void OnAnalyzeNetworkRequest(object? sender, EventArgs e)
     {
-        if (InvokeRequired)
-        {
-            Invoke(() => AddNetworkRequest(request));
-            return;
-        }
+        var selected = GetSelectedNetworkRequest();
+        if (selected == null) return;
 
-        if (_networkListView == null)
-            return;
-
-        var item = new ListViewItem(request.Method);
-        item.SubItems.Add(request.StatusCode.ToString());
-        item.SubItems.Add(request.Url);
-        item.SubItems.Add($"{request.DurationMs:F0} ms");
-        item.SubItems.Add(FormatFileSize(request.ResponseSize ?? 0));
-        item.SubItems.Add(request.MimeType ?? "");
-
-        // Color code by status
-        if (request.IsFailed)
+        OnAskAIRequested?.Invoke(this, new AIRequestEventArgs
         {
-            item.BackColor = Color.LightPink;
-        }
-        else if (request.StatusCode >= 400)
-        {
-            item.BackColor = Color.LightSalmon;
-        }
-        else if (request.DurationMs > 1000)
-        {
-            item.BackColor = Color.LightYellow;
-        }
+            TelemetryItem = selected,
+            DefaultQuery = $"Analyze this network request: {selected.Method} {selected.Url} -> {selected.StatusCode}",
+            ItemType = "Network"
+        });
+    }
 
-        _networkListView.Items.Insert(0, item);
+    private void OnAnalyzeNetworkFailure(object? sender, EventArgs e)
+    {
+        var selected = GetSelectedNetworkRequest();
+        if (selected == null) return;
 
-        // Limit to 500 items
-        while (_networkListView.Items.Count > 500)
+        OnAskAIRequested?.Invoke(this, new AIRequestEventArgs
         {
-            _networkListView.Items.RemoveAt(_networkListView.Items.Count - 1);
+            TelemetryItem = selected,
+            DefaultQuery = $"Why did this network request fail? {selected.Method} {selected.Url} returned {selected.StatusCode}",
+            ItemType = "Network"
+        });
+    }
+
+    private void OnCopyURL(object? sender, EventArgs e)
+    {
+        var selected = GetSelectedNetworkRequest();
+        if (selected != null && !string.IsNullOrEmpty(selected.Url))
+        {
+            Clipboard.SetText(selected.Url);
         }
     }
 
-    public void UpdatePerformanceMetrics(PerformanceMetrics metrics)
+    // ? NEW: Get selected items
+    private ConsoleMessage? GetSelectedConsoleMessage()
     {
-        if (InvokeRequired)
+        if (_consoleListView?.SelectedItems.Count > 0)
         {
-            Invoke(() => UpdatePerformanceMetrics(metrics));
-            return;
+            return _consoleListView.SelectedItems[0].Tag as ConsoleMessage;
         }
-
-        if (_loadTimeLabel != null)
-            _loadTimeLabel.Text = $"{metrics.LoadEventMs:F0} ms";
-
-        if (_fcpLabel != null)
-            _fcpLabel.Text = $"{metrics.FirstContentfulPaintMs:F0} ms";
-
-        if (_lcpLabel != null)
-            _lcpLabel.Text = $"{metrics.LargestContentfulPaintMs:F0} ms";
-
-        if (_memoryLabel != null)
-            _memoryLabel.Text = $"{metrics.MemoryUsageBytes / (1024.0 * 1024.0):F2} MB";
-
-        if (_domNodesLabel != null)
-            _domNodesLabel.Text = metrics.DomNodeCount.ToString();
+        return null;
     }
 
-    public void ClearAll()
+    private NetworkRequest? GetSelectedNetworkRequest()
     {
-        _consoleListView?.Items.Clear();
-        _networkListView?.Items.Clear();
-
-        if (_loadTimeLabel != null) _loadTimeLabel.Text = "0 ms";
-        if (_fcpLabel != null) _fcpLabel.Text = "0 ms";
-        if (_lcpLabel != null) _lcpLabel.Text = "0 ms";
-        if (_memoryLabel != null) _memoryLabel.Text = "0 MB";
-        if (_domNodesLabel != null) _domNodesLabel.Text = "0";
+        if (_networkListView?.SelectedItems.Count > 0)
+        {
+            return _networkListView.SelectedItems[0].Tag as NetworkRequest;
+        }
+        return null;
     }
 
     #endregion
@@ -362,5 +360,142 @@ public partial class LogsDashboard : UserControl
         return $"{len:0.##} {sizes[order]}";
     }
 
+    // ? NEW: Highlight items requested by AI
+    public void HighlightItems(List<Guid> ids)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => HighlightItems(ids));
+            return;
+        }
+
+        // Highlight in console tab
+        if (_consoleListView != null)
+        {
+            foreach (ListViewItem item in _consoleListView.Items)
+            {
+                if (item.Tag is ConsoleMessage msg && ids.Contains(msg.Id))
+                {
+                    item.BackColor = Color.LightGreen;
+                    item.Font = new Font(item.Font, FontStyle.Bold);
+                }
+            }
+        }
+
+        // Highlight in network tab
+        if (_networkListView != null)
+        {
+            foreach (ListViewItem item in _networkListView.Items)
+            {
+                if (item.Tag is NetworkRequest req && ids.Contains(req.Id))
+                {
+                    item.BackColor = Color.LightGreen;
+                    item.Font = new Font(item.Font, FontStyle.Bold);
+                }
+            }
+        }
+    }
+
+    public void ClearAll()
+    {
+        _consoleListView?.Items.Clear();
+        _networkListView?.Items.Clear();
+
+        if (_loadTimeLabel != null) _loadTimeLabel.Text = "0 ms";
+        if (_fcpLabel != null) _fcpLabel.Text = "0 ms";
+        if (_lcpLabel != null) _lcpLabel.Text = "0 ms";
+        if (_memoryLabel != null) _memoryLabel.Text = "0 MB";
+        if (_domNodesLabel != null) _domNodesLabel.Text = "0";
+    }
+
+    public void AddConsoleMessage(ConsoleMessage message)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => AddConsoleMessage(message));
+            return;
+        }
+
+        if (_consoleListView == null)
+            return;
+
+        var item = new ListViewItem(message.Timestamp.ToString("HH:mm:ss.fff"));
+        item.SubItems.Add(message.Level.ToString());
+        item.SubItems.Add(message.Message);
+        item.SubItems.Add(message.Source ?? "");
+        item.SubItems.Add(message.LineNumber.ToString());
+
+        // ? Store the message object in Tag for context menu
+        item.Tag = message;
+
+        // Color code by level
+        item.BackColor = message.Level switch
+        {
+            ConsoleMessageLevel.Error => Color.LightPink,
+            ConsoleMessageLevel.Warning => Color.LightYellow,
+            ConsoleMessageLevel.Info => Color.LightCyan,
+            _ => Color.White
+        };
+
+        _consoleListView.Items.Add(item);
+    }
+
+    public void AddNetworkRequest(NetworkRequest request)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => AddNetworkRequest(request));
+            return;
+        }
+
+        if (_networkListView == null)
+            return;
+
+        var item = new ListViewItem(request.Method);
+        item.SubItems.Add(request.StatusCode.ToString());
+        item.SubItems.Add(request.Url ?? "");
+        item.SubItems.Add($"{request.DurationMs:F2} ms");
+        item.SubItems.Add($"{(request.ResponseSize ?? 0) / 1024.0:F2} KB"); // Format bytes
+        item.SubItems.Add(request.MimeType ?? "");
+
+        // ? Store the request object in Tag for context menu
+        item.Tag = request;
+
+        // Color code by status
+        if (request.IsFailed || request.StatusCode >= 400)
+        {
+            item.BackColor = Color.LightSalmon;
+        }
+        else if (request.StatusCode >= 300)
+        {
+            item.BackColor = Color.LightYellow;
+        }
+
+        _networkListView.Items.Add(item);
+    }
+
+    public void UpdatePerformanceMetrics(PerformanceMetrics metrics)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => UpdatePerformanceMetrics(metrics));
+            return;
+        }
+
+        if (_loadTimeLabel != null)
+            _loadTimeLabel.Text = $"Load Time: {metrics.LoadEventMs:F2} ms";
+
+        if (_fcpLabel != null)
+            _fcpLabel.Text = $"First Contentful Paint: {metrics.FirstContentfulPaintMs:F2} ms";
+
+        if (_lcpLabel != null)
+            _lcpLabel.Text = $"Largest Contentful Paint: {metrics.LargestContentfulPaintMs:F2} ms";
+
+        if (_memoryLabel != null)
+            _memoryLabel.Text = $"Memory Usage: {metrics.MemoryUsageBytes / 1024 / 1024:F2} MB";
+
+        if (_domNodesLabel != null)
+            _domNodesLabel.Text = $"DOM Nodes: {metrics.DomNodeCount}";
+    }
     #endregion
 }
