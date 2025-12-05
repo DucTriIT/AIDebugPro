@@ -1,6 +1,8 @@
 using System.Text;
 using AIDebugPro.Core.Models;
 using AIDebugPro.Core.Constants;
+using AIDebugPro.AIIntegration.Models;
+using AIDebugPro.Services.Utilities;
 
 namespace AIDebugPro.AIIntegration;
 
@@ -303,6 +305,160 @@ public class PromptComposer
             }
             prompt.AppendLine();
         }
+
+        return prompt.ToString();
+    }
+
+    /// <summary>
+    /// Composes debug prompt with telemetry context
+    /// </summary>
+    public string ComposeDebugPrompt(string userQuery, TelemetryContext context)
+    {
+        var prompt = new StringBuilder();
+
+        prompt.AppendLine("# Debug Assistant Request");
+        prompt.AppendLine();
+        prompt.AppendLine($"User Query: {userQuery}");
+        prompt.AppendLine();
+
+        // Add telemetry context
+        prompt.AppendLine("## Current Context");
+        prompt.AppendLine($"- Active Tab: {context.CurrentTab}");
+        prompt.AppendLine($"- Current URL: {context.CurrentUrl ?? "N/A"}");
+        prompt.AppendLine($"- Session Started: {context.Timestamp:HH:mm:ss}");
+        prompt.AppendLine();
+
+        // Console errors
+        var errors = context.RecentConsoleMessages
+            .Where(m => m.Level == ConsoleMessageLevel.Error)
+            .ToList();
+        
+        if (errors.Any())
+        {
+            prompt.AppendLine("## Console Errors (Recent)");
+            foreach (var error in errors.Take(5))
+            {
+                prompt.AppendLine($"- [{error.Timestamp:HH:mm:ss}] {error.Message}");
+                if (!string.IsNullOrEmpty(error.Source))
+                    prompt.AppendLine($"  Source: {error.Source}:{error.LineNumber}");
+                if (!string.IsNullOrEmpty(error.StackTrace))
+                    prompt.AppendLine($"  Stack: {error.StackTrace.Truncate(200)}");
+            }
+            prompt.AppendLine();
+        }
+
+        // Console warnings
+        var warnings = context.RecentConsoleMessages
+            .Where(m => m.Level == ConsoleMessageLevel.Warning)
+            .ToList();
+        
+        if (warnings.Any())
+        {
+            prompt.AppendLine("## Console Warnings");
+            foreach (var warning in warnings.Take(3))
+            {
+                prompt.AppendLine($"- [{warning.Timestamp:HH:mm:ss}] {warning.Message}");
+            }
+            prompt.AppendLine();
+        }
+
+        // Network failures
+        var failures = context.RecentNetworkRequests
+            .Where(r => r.IsFailed || r.StatusCode >= 400)
+            .ToList();
+        
+        if (failures.Any())
+        {
+            prompt.AppendLine("## Network Issues");
+            foreach (var req in failures.Take(5))
+            {
+                prompt.AppendLine($"- {req.Method} {req.Url?.Truncate(80)} -> {req.StatusCode} ({req.DurationMs}ms)");
+                if (!string.IsNullOrEmpty(req.ErrorText))
+                    prompt.AppendLine($"  Error: {req.ErrorText}");
+            }
+            prompt.AppendLine();
+        }
+
+        // Performance metrics
+        if (context.LatestPerformanceMetrics != null)
+        {
+            var metrics = context.LatestPerformanceMetrics;
+            prompt.AppendLine("## Performance Metrics");
+            prompt.AppendLine($"- Load Time: {metrics.LoadEventMs}ms");
+            prompt.AppendLine($"- First Contentful Paint: {metrics.FirstContentfulPaintMs}ms");
+            if (metrics.LargestContentfulPaintMs > 0)
+                prompt.AppendLine($"- Largest Contentful Paint: {metrics.LargestContentfulPaintMs}ms");
+            prompt.AppendLine($"- Memory Usage: {metrics.MemoryUsageBytes / 1024 / 1024}MB");
+            prompt.AppendLine($"- DOM Nodes: {metrics.DomNodeCount}");
+            prompt.AppendLine();
+        }
+
+        // Selected item details
+        if (context.SelectedConsoleMessage != null)
+        {
+            prompt.AppendLine("## Selected Console Message (USER FOCUS)");
+            var msg = context.SelectedConsoleMessage;
+            prompt.AppendLine($"Level: {msg.Level}");
+            prompt.AppendLine($"Message: {msg.Message}");
+            prompt.AppendLine($"Source: {msg.Source}:{msg.LineNumber}");
+            if (!string.IsNullOrEmpty(msg.StackTrace))
+                prompt.AppendLine($"Stack Trace:\n{msg.StackTrace}");
+            prompt.AppendLine();
+        }
+
+        if (context.SelectedNetworkRequest != null)
+        {
+            prompt.AppendLine("## Selected Network Request (USER FOCUS)");
+            var req = context.SelectedNetworkRequest;
+            prompt.AppendLine($"Method: {req.Method}");
+            prompt.AppendLine($"URL: {req.Url}");
+            prompt.AppendLine($"Status: {req.StatusCode} {req.StatusText}");
+            prompt.AppendLine($"Duration: {req.DurationMs}ms");
+            prompt.AppendLine($"Size: {req.ResponseSize} bytes");
+            
+            if (req.RequestHeaders.Any())
+            {
+                prompt.AppendLine("Request Headers:");
+                foreach (var header in req.RequestHeaders.Take(5))
+                    prompt.AppendLine($"  {header.Key}: {header.Value?.Truncate(100)}");
+            }
+            
+            if (req.ResponseHeaders.Any())
+            {
+                prompt.AppendLine("Response Headers:");
+                foreach (var header in req.ResponseHeaders.Take(5))
+                    prompt.AppendLine($"  {header.Key}: {header.Value?.Truncate(100)}");
+            }
+            
+            if (!string.IsNullOrEmpty(req.ResponseBody))
+            {
+                prompt.AppendLine($"Response Body (truncated):\n{req.ResponseBody.Truncate(500)}");
+            }
+            
+            prompt.AppendLine();
+        }
+
+        // Session statistics
+        prompt.AppendLine("## Session Statistics");
+        prompt.AppendLine($"- Total Console Messages: {context.SessionStatistics.TotalConsoleMessages}");
+        prompt.AppendLine($"- Errors: {context.SessionStatistics.ConsoleErrors}");
+        prompt.AppendLine($"- Warnings: {context.SessionStatistics.ConsoleWarnings}");
+        prompt.AppendLine($"- Network Requests: {context.SessionStatistics.TotalNetworkRequests}");
+        prompt.AppendLine($"- Failed Requests: {context.SessionStatistics.FailedNetworkRequests}");
+        prompt.AppendLine();
+
+        // Instructions for AI
+        prompt.AppendLine("## Instructions");
+        prompt.AppendLine("You are an expert debugging assistant. Based on the above telemetry data:");
+        prompt.AppendLine("1. Analyze the root cause of any issues");
+        prompt.AppendLine("2. Explain what's happening in simple, clear terms");
+        prompt.AppendLine("3. Provide specific, actionable fix recommendations");
+        prompt.AppendLine("4. Include code examples where helpful (use JavaScript/TypeScript)");
+        prompt.AppendLine("5. Assess the severity and impact");
+        prompt.AppendLine("6. If the user selected a specific item, focus on that first");
+        prompt.AppendLine();
+        prompt.AppendLine("Format your response in a friendly, helpful tone as if explaining to a developer colleague.");
+        prompt.AppendLine("Use bullet points and clear sections for readability.");
 
         return prompt.ToString();
     }

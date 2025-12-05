@@ -137,6 +137,12 @@ public static class ServiceRegistration
         // Token Manager - Singleton for caching
         services.AddSingleton<AIIntegration.TokenManager>();
 
+        // AI Debug Assistant (Context-Aware) - Singleton
+        services.AddSingleton<AIIntegration.AIDebugAssistant>();
+
+        // Telemetry Context Builder - Singleton
+        services.AddSingleton<AIIntegration.TelemetryContextBuilder>();
+
         return services;
     }
 
