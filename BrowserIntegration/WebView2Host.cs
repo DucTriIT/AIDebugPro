@@ -89,10 +89,12 @@ public class WebView2Host : IDisposable
     /// </summary>
     public async Task StartCDPSessionAsync(Guid sessionId)
     {
-        if (!_isInitialized)
-            throw new InvalidOperationException("WebView2 not initialized");
+        // Check if CoreWebView2 is available (initialized by external caller)
+        if (_webView.CoreWebView2 == null)
+            throw new InvalidOperationException("WebView2 CoreWebView2 is not initialized");
 
         _currentSessionId = sessionId;
+        _isInitialized = true; // Mark as initialized since WebView2 is ready
 
         try
         {

@@ -338,8 +338,35 @@ This project is licensed under the **MIT License** - see the [LICENSE.txt](LICEN
 - [x] Report generation (HTML, Markdown, JSON)
 - [x] Dependency injection and logging
 - [x] User Secrets configuration
+- [x] Console, Network, Performance telemetry capture
 
-### **v1.1 (Next)**
+### **v1.1 (In Progress)** ? **CRITICAL**
+**Focus: Context-Aware AI Debugging**
+
+**Week 1: Core AI Integration**
+- [ ] ? `AIDebugAssistant.cs` - Context-aware AI analysis service
+- [ ] ? `TelemetryContextBuilder.cs` - Gather telemetry context for AI
+- [ ] ? Enhanced `AIAssistantPanel` - Interactive chat with telemetry
+- [ ] AI responds to user queries about errors, network, performance
+- [ ] Telemetry-specific prompt templates
+
+**Week 2: User Experience**
+- [ ] Right-click context menus on Console/Network/Performance tabs
+- [ ] "Ask AI about this error" quick actions
+- [ ] Quick prompt buttons (Analyze Errors, Check Network, Performance)
+- [ ] Highlight telemetry items when AI references them
+- [ ] Selection tracking across all telemetry tabs
+
+**Week 3: Advanced Features**
+- [ ] Auto-analysis on capture stop
+- [ ] Issue tracking and resolution
+- [ ] AI-identified issue persistence
+- [ ] Notification system for critical issues
+- [ ] End-to-end testing and documentation
+
+**See:** [AI_CHAT_INTEGRATION_SPEC.md](AI_CHAT_INTEGRATION_SPEC.md) for detailed specification
+
+### **v1.2 (Next)**
 - [ ] Unit and integration tests
 - [ ] Performance profiling and optimization
 - [ ] Enhanced error handling
@@ -355,6 +382,8 @@ This project is licensed under the **MIT License** - see the [LICENSE.txt](LICEN
 - [ ] Cloud synchronization
 - [ ] Browser extension
 - [ ] Multi-browser support
+- [ ] Jira/GitHub issue integration
+- [ ] Custom AI model fine-tuning
 
 ---
 

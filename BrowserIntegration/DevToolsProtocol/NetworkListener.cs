@@ -46,10 +46,16 @@ public class NetworkListener : INetworkListener,IDisposable
 
         try
         {
+            _logger?.LogInformation("?? STARTING NetworkListener for session {SessionId}", sessionId);
+            
             // Enable Network domain
+            _logger?.LogDebug("Enabling CDP Network domain...");
             await _coreWebView.CallDevToolsProtocolMethodAsync("Network.enable", "{}");
+            _logger?.LogDebug("? CDP Network domain enabled");
 
             // Subscribe to network events
+            _logger?.LogDebug("Subscribing to CDP Network events...");
+            
             _coreWebView.GetDevToolsProtocolEventReceiver("Network.requestWillBeSent")
                 .DevToolsProtocolEventReceived += OnRequestWillBeSent;
 
@@ -66,11 +72,11 @@ public class NetworkListener : INetworkListener,IDisposable
                 .DevToolsProtocolEventReceived += OnRequestServedFromCache;
 
             _isListening = true;
-            _logger?.LogInformation("NetworkListener started for session {SessionId}", sessionId);
+            _logger?.LogInformation("? NetworkListener STARTED successfully - Listening for network events");
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to start NetworkListener");
+            _logger?.LogError(ex, "? Failed to start NetworkListener");
             throw;
         }
     }
@@ -230,6 +236,7 @@ public class NetworkListener : INetworkListener,IDisposable
             
             if (!_requests.TryRemove(requestId, out var builder))
             {
+                _logger?.LogTrace("Loading finished for unknown request {RequestId} (might have been cleared)", requestId);
                 return;
             }
 
@@ -261,16 +268,21 @@ public class NetworkListener : INetworkListener,IDisposable
             }
 
             var networkRequest = builder.Build();
-            await _telemetryAggregator.AddNetworkRequestAsync(_currentSessionId, networkRequest);
-
-            _logger?.LogDebug("Request finished: {Method} {Url} - {Duration}ms",
+            
+            _logger?.LogInformation("?? NETWORK REQUEST FINISHED: {Method} {Url} -> {Status} ({Duration}ms, {Size} bytes)",
                 networkRequest.Method,
-                networkRequest.Url.Truncate(80),
-                networkRequest.DurationMs);
+                networkRequest.Url.Truncate(60),
+                networkRequest.StatusCode,
+                networkRequest.DurationMs,
+                networkRequest.ResponseSize);
+
+            await _telemetryAggregator.AddNetworkRequestAsync(_currentSessionId, networkRequest);
+            
+            _logger?.LogDebug("? Network request added to aggregator: {RequestId}", networkRequest.RequestId);
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Error processing loading finished");
+            _logger?.LogError(ex, "? Error processing loading finished");
         }
     }
 

@@ -4,6 +4,7 @@ using AIDebugPro.Core.Models;
 using AIDebugPro.Presentation.UserControls;
 using AIDebugPro.Presentation.ViewModels;
 using AIDebugPro.BrowserIntegration;
+using AIDebugPro.Services.Utilities;
 
 namespace AIDebugPro.Presentation.Forms;
 
@@ -26,6 +27,9 @@ public partial class MainForm : Form
     // Current session
     private Guid? _currentSessionId;
     private WebView2Host? _webViewHost;
+
+    private HashSet<string> _displayedConsoleMessageIds = new();
+    private HashSet<string> _displayedNetworkRequestIds = new();
 
     public MainForm(
         ISessionManager sessionManager,
@@ -262,49 +266,119 @@ public partial class MainForm : Form
 
         try
         {
-            // Get console messages
+            _logger?.LogDebug("=== UPDATE TELEMETRY DISPLAY START ===");
+            _logger?.LogDebug("Session ID: {SessionId}, IsCapturing: {IsCapturing}", 
+                _currentSessionId, _viewModel.IsCapturing);
+
+            // Get recent console messages (last 30 seconds to capture new ones)
             var consoleMessages = await _telemetryAggregator.GetConsoleMessagesAsync(
                 _currentSessionId.Value, 
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(30));
 
-            // Get network requests
+            // Get recent network requests
             var networkRequests = await _telemetryAggregator.GetNetworkRequestsAsync(
                 _currentSessionId.Value,
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(30));
 
             // Get performance metrics
             var performanceMetrics = await _telemetryAggregator.GetPerformanceMetricsAsync(
                 _currentSessionId.Value,
                 TimeSpan.FromSeconds(10));
 
-            // Update UI
+            // DETAILED LOGGING
+            _logger?.LogInformation("📊 TELEMETRY FETCHED: Console={Console}, Network={Network}, Performance={Performance}",
+                consoleMessages.Count(),
+                networkRequests.Count(),
+                performanceMetrics.Count());
+
+            // Log network request details
+            if (networkRequests.Any())
+            {
+                _logger?.LogInformation("🌐 NETWORK REQUESTS FOUND:");
+                foreach (var req in networkRequests.Take(5))
+                {
+                    _logger?.LogInformation("  - {Method} {Url} -> {Status} ({Duration}ms)",
+                        req.Method, req.Url?.Truncate(50), req.StatusCode, req.DurationMs);
+                }
+            }
+            else
+            {
+                _logger?.LogWarning("⚠️  NO NETWORK REQUESTS found in last 30 seconds");
+            }
+
+            // Log performance metrics details
+            if (performanceMetrics.Any())
+            {
+                var latest = performanceMetrics.OrderByDescending(m => m.Timestamp).First();
+                _logger?.LogInformation("⚡ PERFORMANCE METRICS FOUND: LoadTime={Load}ms, FCP={FCP}ms, Memory={Memory}MB",
+                    latest.LoadEventMs, latest.FirstContentfulPaintMs, latest.MemoryUsageBytes / 1024 / 1024);
+            }
+            else
+            {
+                _logger?.LogWarning("⚠️  NO PERFORMANCE METRICS found in last 10 seconds");
+            }
+
+            // Add only new console messages
+            int newConsoleCount = 0;
             foreach (var msg in consoleMessages.OrderBy(m => m.Timestamp))
             {
-                _logsDashboard?.AddConsoleMessage(msg);
+                var msgId = $"{msg.Timestamp:O}_{msg.Message}_{msg.Level}";
+                if (_displayedConsoleMessageIds.Add(msgId))
+                {
+                    _logsDashboard?.AddConsoleMessage(msg);
+                    newConsoleCount++;
+                }
+            }
+            if (newConsoleCount > 0)
+            {
+                _logger?.LogDebug("✅ Added {Count} new console messages to UI", newConsoleCount);
             }
 
+            // Add only new network requests
+            int newNetworkCount = 0;
             foreach (var req in networkRequests.OrderBy(r => r.Timestamp))
             {
-                _logsDashboard?.AddNetworkRequest(req);
+                if (!string.IsNullOrEmpty(req.RequestId) && _displayedNetworkRequestIds.Add(req.RequestId))
+                {
+                    _logger?.LogDebug("➕ Adding network request to UI: {Method} {Url} ({RequestId})",
+                        req.Method, req.Url?.Truncate(30), req.RequestId?.Truncate(10));
+                    _logsDashboard?.AddNetworkRequest(req);
+                    newNetworkCount++;
+                }
+            }
+            if (newNetworkCount > 0)
+            {
+                _logger?.LogInformation("✅ Added {Count} new network requests to UI", newNetworkCount);
+            }
+            else if (networkRequests.Any())
+            {
+                _logger?.LogWarning("⚠️  Network requests exist but none were new (all already displayed)");
             }
 
+            // Update performance metrics (always show latest)
             var latestMetrics = performanceMetrics.OrderByDescending(m => m.Timestamp).FirstOrDefault();
             if (latestMetrics != null)
             {
+                _logger?.LogDebug("✅ Updating performance metrics in UI");
                 _logsDashboard?.UpdatePerformanceMetrics(latestMetrics);
             }
 
             // Update counts in view model
             var stats = await _telemetryAggregator.GetStatisticsAsync(_currentSessionId.Value);
+            _logger?.LogDebug("📈 STATS: Total Console={Console}, Network={Network}, Errors={Errors}, Warnings={Warnings}",
+                stats.TotalConsoleMessages, stats.TotalNetworkRequests, stats.ConsoleErrors, stats.ConsoleWarnings);
+            
             _viewModel.UpdateTelemetryCounts(
                 stats.TotalConsoleMessages,
                 stats.TotalNetworkRequests,
                 stats.ConsoleErrors,
                 stats.ConsoleWarnings);
+
+            _logger?.LogDebug("=== UPDATE TELEMETRY DISPLAY END ===");
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Error updating telemetry display");
+            _logger?.LogError(ex, "❌ ERROR in UpdateTelemetryDisplayAsync");
         }
     }
 
@@ -543,36 +617,48 @@ public partial class MainForm : Form
                 if (_currentSessionId == null) return;
             }
 
+            _logger?.LogInformation("🚀 STARTING CAPTURE for session {SessionId}", _currentSessionId);
             UpdateStatus("Starting capture...");
             
             // Check if WebView2 is ready
             if (_webViewPanel?.GetWebView2()?.CoreWebView2 == null)
             {
+                _logger?.LogError("❌ WebView2.CoreWebView2 is NULL - cannot start capture");
                 ShowError("Failed to start capture", new Exception("WebView2 not initialized. Please wait for the browser to load."));
                 return;
             }
 
+            _logger?.LogDebug("✅ WebView2.CoreWebView2 is ready");
+
             // Initialize WebView2Host if not already done
             if (_webViewHost == null)
             {
+                _logger?.LogDebug("Creating new WebView2Host...");
                 _webViewHost = new WebView2Host(_webViewPanel.GetWebView2(), _telemetryAggregator);
-                
-                // Initialize the WebView2Host (this is required before starting CDP session)
-                await _webViewHost.InitializeAsync();
-                _logger?.LogInformation("WebView2Host initialized");
+                _logger?.LogInformation("✅ WebView2Host created successfully");
+            }
+            else
+            {
+                _logger?.LogDebug("WebView2Host already exists, reusing");
             }
 
-            // Start CDP session
+            // Start CDP session (WebView2 is already initialized by WebViewPanel)
+            _logger?.LogInformation("📡 Starting CDP session...");
             await _webViewHost.StartCDPSessionAsync(_currentSessionId.Value);
-            _logger?.LogInformation("CDP session started for session {SessionId}", _currentSessionId);
+            _logger?.LogInformation("✅ CDP session started successfully for session {SessionId}", _currentSessionId);
+            
+            // Clear displayed item tracking for new capture session
+            _displayedConsoleMessageIds.Clear();
+            _displayedNetworkRequestIds.Clear();
+            _logger?.LogDebug("Cleared displayed item tracking");
             
             _viewModel.IsCapturing = true;
             UpdateStatus("Capturing telemetry...");
-            _logger?.LogInformation("Capture started for session {SessionId}", _currentSessionId);
+            _logger?.LogInformation("✅ CAPTURE STARTED - Telemetry collection is now active");
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Error starting capture");
+            _logger?.LogError(ex, "❌ ERROR starting capture");
             ShowError("Failed to start capture", ex);
         }
     }
