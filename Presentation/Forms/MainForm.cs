@@ -132,6 +132,8 @@ public partial class MainForm : Form
 
         // Tools menu
         var toolsMenu = new ToolStripMenuItem("&Tools");
+        toolsMenu.DropDownItems.Add("&Navigate to URL...", null, OnNavigateToUrl);
+        toolsMenu.DropDownItems.Add(new ToolStripSeparator());
         toolsMenu.DropDownItems.Add("&Start Capture", null, OnStartCapture);
         toolsMenu.DropDownItems.Add("S&top Capture", null, OnStopCapture);
         toolsMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -232,6 +234,14 @@ public partial class MainForm : Form
             if (_webViewPanel != null)
             {
                 await _webViewPanel.InitializeAsync();
+                
+                // Set up telemetry update timer
+                var updateTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 1000 // Update every second
+                };
+                updateTimer.Tick += async (s, args) => await UpdateTelemetryDisplayAsync();
+                updateTimer.Start();
             }
 
             LoadUserSettings();
@@ -243,6 +253,58 @@ public partial class MainForm : Form
             _logger?.LogError(ex, "Error loading MainForm");
             MessageBox.Show($"Failed to initialize application: {ex.Message}", "Initialization Error", 
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task UpdateTelemetryDisplayAsync()
+    {
+        if (!_currentSessionId.HasValue || !_viewModel.IsCapturing) return;
+
+        try
+        {
+            // Get console messages
+            var consoleMessages = await _telemetryAggregator.GetConsoleMessagesAsync(
+                _currentSessionId.Value, 
+                TimeSpan.FromSeconds(10));
+
+            // Get network requests
+            var networkRequests = await _telemetryAggregator.GetNetworkRequestsAsync(
+                _currentSessionId.Value,
+                TimeSpan.FromSeconds(10));
+
+            // Get performance metrics
+            var performanceMetrics = await _telemetryAggregator.GetPerformanceMetricsAsync(
+                _currentSessionId.Value,
+                TimeSpan.FromSeconds(10));
+
+            // Update UI
+            foreach (var msg in consoleMessages.OrderBy(m => m.Timestamp))
+            {
+                _logsDashboard?.AddConsoleMessage(msg);
+            }
+
+            foreach (var req in networkRequests.OrderBy(r => r.Timestamp))
+            {
+                _logsDashboard?.AddNetworkRequest(req);
+            }
+
+            var latestMetrics = performanceMetrics.OrderByDescending(m => m.Timestamp).FirstOrDefault();
+            if (latestMetrics != null)
+            {
+                _logsDashboard?.UpdatePerformanceMetrics(latestMetrics);
+            }
+
+            // Update counts in view model
+            var stats = await _telemetryAggregator.GetStatisticsAsync(_currentSessionId.Value);
+            _viewModel.UpdateTelemetryCounts(
+                stats.TotalConsoleMessages,
+                stats.TotalNetworkRequests,
+                stats.ConsoleErrors,
+                stats.ConsoleWarnings);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Error updating telemetry display");
         }
     }
 
@@ -408,6 +470,29 @@ public partial class MainForm : Form
         UpdateStatus("Page refreshed");
     }
 
+    private void OnNavigateToUrl(object? sender, EventArgs e)
+    {
+        var dialog = new InputDialog("Navigate to URL", "Enter URL:");
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            var url = dialog.InputText;
+            
+            // Add https:// if no protocol specified
+            if (!string.IsNullOrEmpty(url) &&
+                !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                url = "https://" + url;
+            }
+
+            if (_webViewPanel?.GetWebView2()?.CoreWebView2 != null)
+            {
+                _webViewPanel.GetWebView2().CoreWebView2.Navigate(url);
+                UpdateStatus($"Navigating to: {url}");
+            }
+        }
+    }
+
     private void OnShowDocumentation(object? sender, EventArgs e)
     {
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -459,6 +544,28 @@ public partial class MainForm : Form
             }
 
             UpdateStatus("Starting capture...");
+            
+            // Check if WebView2 is ready
+            if (_webViewPanel?.GetWebView2()?.CoreWebView2 == null)
+            {
+                ShowError("Failed to start capture", new Exception("WebView2 not initialized. Please wait for the browser to load."));
+                return;
+            }
+
+            // Initialize WebView2Host if not already done
+            if (_webViewHost == null)
+            {
+                _webViewHost = new WebView2Host(_webViewPanel.GetWebView2(), _telemetryAggregator);
+                
+                // Initialize the WebView2Host (this is required before starting CDP session)
+                await _webViewHost.InitializeAsync();
+                _logger?.LogInformation("WebView2Host initialized");
+            }
+
+            // Start CDP session
+            await _webViewHost.StartCDPSessionAsync(_currentSessionId.Value);
+            _logger?.LogInformation("CDP session started for session {SessionId}", _currentSessionId);
+            
             _viewModel.IsCapturing = true;
             UpdateStatus("Capturing telemetry...");
             _logger?.LogInformation("Capture started for session {SessionId}", _currentSessionId);
@@ -477,8 +584,23 @@ public partial class MainForm : Form
             if (!_currentSessionId.HasValue) return;
 
             UpdateStatus("Stopping capture...");
+            
+            // Stop CDP session
+            if (_webViewHost != null)
+            {
+                await _webViewHost.StopCDPSessionAsync();
+                _logger?.LogInformation("CDP session stopped for session {SessionId}", _currentSessionId);
+            }
+            
             _viewModel.IsCapturing = false;
-            await _sessionManager.EndSessionAsync(_currentSessionId.Value);
+            
+            // Only end session if it's still active
+            var session = await _sessionManager.GetSessionAsync(_currentSessionId.Value);
+            if (session != null && session.Status == SessionStatus.Active)
+            {
+                await _sessionManager.EndSessionAsync(_currentSessionId.Value);
+            }
+            
             UpdateStatus("Capture stopped");
             _logger?.LogInformation("Capture stopped for session {SessionId}", _currentSessionId);
         }
