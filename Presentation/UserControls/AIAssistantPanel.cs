@@ -1,5 +1,7 @@
 using AIDebugPro.Core.Models;
 using AIDebugPro.Presentation.ViewModels;
+using AIDebugPro.AIIntegration;
+using AIDebugPro.AIIntegration.Models;
 
 namespace AIDebugPro.Presentation.UserControls;
 
@@ -15,12 +17,21 @@ public partial class AIAssistantPanel : UserControl
     private TabControl? _tabControl;
     private ListView? _issuesListView;
     private ListView? _recommendationsListView;
+    private FlowLayoutPanel? _quickPromptsPanel;
 
     private AIAssistantViewModel? _viewModel;
+    
+    // ? NEW: AI Integration
+    private AIDebugAssistant? _aiAssistant;
+    private TelemetryContextBuilder? _contextBuilder;
+    private Guid? _currentSessionId;
+    private ActiveTab _currentTab = ActiveTab.Console;
+    private Label? _typingIndicator;
 
     #region Events
 
     public event EventHandler<string>? MessageSent;
+    public event EventHandler<List<Guid>>? OnHighlightRequested;
 
     #endregion
 
@@ -28,6 +39,32 @@ public partial class AIAssistantPanel : UserControl
     {
         InitializeComponent();
         InitializeControls();
+    }
+
+    // ? NEW: Initialize with AI services
+    public void Initialize(
+        AIDebugAssistant aiAssistant,
+        TelemetryContextBuilder contextBuilder)
+    {
+        _aiAssistant = aiAssistant;
+        _contextBuilder = contextBuilder;
+    }
+
+    // ? NEW: Set current context
+    public void SetContext(Guid sessionId, ActiveTab tab)
+    {
+        _currentSessionId = sessionId;
+        _currentTab = tab;
+    }
+
+    // ? NEW: Set query programmatically
+    public void SetQuery(string query)
+    {
+        if (_messageInput != null)
+        {
+            _messageInput.Text = query;
+            _messageInput.Focus();
+        }
     }
 
     private void InitializeControls()
@@ -65,6 +102,10 @@ public partial class AIAssistantPanel : UserControl
     {
         var panel = new Panel { Dock = DockStyle.Fill };
 
+        // ? NEW: Quick prompts panel
+        _quickPromptsPanel = CreateQuickPromptsPanel();
+        panel.Controls.Add(_quickPromptsPanel);
+
         // Chat display
         _chatDisplay = new RichTextBox
         {
@@ -74,6 +115,19 @@ public partial class AIAssistantPanel : UserControl
             Font = new Font("Segoe UI", 10)
         };
         panel.Controls.Add(_chatDisplay);
+
+        // ? NEW: Typing indicator
+        _typingIndicator = new Label
+        {
+            Text = "?? AI is thinking...",
+            Dock = DockStyle.Bottom,
+            Height = 25,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.Gray,
+            Visible = false,
+            Padding = new Padding(5, 0, 0, 0)
+        };
+        panel.Controls.Add(_typingIndicator);
 
         // Input panel
         var inputPanel = new Panel
@@ -116,6 +170,51 @@ public partial class AIAssistantPanel : UserControl
         panel.Controls.Add(inputPanel);
 
         return panel;
+    }
+
+    // ? NEW: Create quick prompts panel
+    private FlowLayoutPanel CreateQuickPromptsPanel()
+    {
+        var panel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 60,
+            Padding = new Padding(10),
+            AutoSize = false
+        };
+
+        var prompts = new[]
+        {
+            ("??", "Analyze all errors"),
+            ("??", "Check network failures"),
+            ("?", "Performance bottlenecks"),
+            ("??", "Generate summary")
+        };
+
+        foreach (var (emoji, text) in prompts)
+        {
+            var button = new Button
+            {
+                Text = $"{emoji} {text}",
+                AutoSize = true,
+                Margin = new Padding(5),
+                Height = 30
+            };
+            button.Click += (s, e) => OnQuickPrompt(text);
+            panel.Controls.Add(button);
+        }
+
+        return panel;
+    }
+
+    // ? NEW: Handle quick prompts
+    private void OnQuickPrompt(string prompt)
+    {
+        if (_messageInput != null)
+        {
+            _messageInput.Text = prompt;
+            SendMessage();
+        }
     }
 
     private ListView CreateIssuesListView()
@@ -174,28 +273,74 @@ public partial class AIAssistantPanel : UserControl
         _viewModel?.Clear();
     }
 
-    private void SendMessage()
+    // ? ENHANCED: Send message with AI integration
+    private async void SendMessage()
     {
         if (string.IsNullOrWhiteSpace(_messageInput?.Text))
             return;
 
-        var message = _messageInput.Text;
+        if (_aiAssistant == null || _contextBuilder == null)
+        {
+            AddMessageToChat("AI Assistant not initialized", false);
+            return;
+        }
 
-        // Add user message to chat
-        AddMessageToChat(message, true);
-
-        // Raise event
-        MessageSent?.Invoke(this, message);
-
-        // Clear input
+        var userMessage = _messageInput.Text;
         _messageInput.Clear();
 
-        // Simulate AI response (will be replaced with actual AI integration)
-        Task.Run(async () =>
+        try
         {
-            await Task.Delay(1000);
-            Invoke(() => AddMessageToChat("Processing your request...", false));
-        });
+            // Add user message to chat
+            AddMessageToChat(userMessage, isUser: true);
+            
+            // Show typing indicator
+            ShowTypingIndicator(true);
+
+            // Build telemetry context
+            var context = await _contextBuilder.BuildContextAsync(
+                _currentSessionId ?? Guid.Empty,
+                _currentTab,
+                selectedItem: null // TODO: Get from MainForm if available
+            );
+
+            // Get AI response
+            var response = await _aiAssistant.AnalyzeAsync(userMessage, context);
+
+            // Hide typing indicator
+            ShowTypingIndicator(false);
+
+            // Add AI response
+            AddMessageToChat(response.Message, isUser: false);
+
+            // Highlight related items
+            if (response.RelatedTelemetryIds.Any())
+            {
+                OnHighlightRequested?.Invoke(this, response.RelatedTelemetryIds);
+            }
+
+            // Raise event
+            MessageSent?.Invoke(this, userMessage);
+        }
+        catch (Exception ex)
+        {
+            ShowTypingIndicator(false);
+            AddMessageToChat($"Error: {ex.Message}", isUser: false);
+        }
+    }
+
+    // ? NEW: Show/hide typing indicator
+    private void ShowTypingIndicator(bool show)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => ShowTypingIndicator(show));
+            return;
+        }
+
+        if (_typingIndicator != null)
+        {
+            _typingIndicator.Visible = show;
+        }
     }
 
     public void AddMessageToChat(string message, bool isUser)
@@ -231,6 +376,13 @@ public partial class AIAssistantPanel : UserControl
         _chatDisplay.ScrollToCaret();
 
         _viewModel?.AddChatMessage(message, isUser);
+    }
+
+    // ? NEW: Show AI analysis
+    public void ShowAnalysis(AIDebugResponse response)
+    {
+        AddMessageToChat(response.Message, isUser: false);
+        _tabControl.SelectedIndex = 0; // Switch to Chat tab
     }
 
     public void SetViewModel(AIAssistantViewModel viewModel)

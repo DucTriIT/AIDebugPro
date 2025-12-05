@@ -5,6 +5,8 @@ using AIDebugPro.Presentation.UserControls;
 using AIDebugPro.Presentation.ViewModels;
 using AIDebugPro.BrowserIntegration;
 using AIDebugPro.Services.Utilities;
+using AIDebugPro.AIIntegration;
+using AIDebugPro.AIIntegration.Models;
 
 namespace AIDebugPro.Presentation.Forms;
 
@@ -28,6 +30,10 @@ public partial class MainForm : Form
     private Guid? _currentSessionId;
     private WebView2Host? _webViewHost;
 
+    // ⭐ NEW: AI services
+    private AIDebugAssistant? _aiAssistant;
+    private TelemetryContextBuilder? _contextBuilder;
+
     private HashSet<string> _displayedConsoleMessageIds = new();
     private HashSet<string> _displayedNetworkRequestIds = new();
 
@@ -35,12 +41,18 @@ public partial class MainForm : Form
         ISessionManager sessionManager,
         ITelemetryAggregator telemetryAggregator,
         MainViewModel viewModel,
+        AIDebugAssistant aiAssistant,           // ⭐ NEW
+        TelemetryContextBuilder contextBuilder,  // ⭐ NEW
         ILogger<MainForm>? logger = null)
     {
         _sessionManager = sessionManager ?? throw new ArgumentNullException(nameof(sessionManager));
         _telemetryAggregator = telemetryAggregator ?? throw new ArgumentNullException(nameof(telemetryAggregator));
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _logger = logger;
+
+        // ⭐ NEW: Store AI services
+        _aiAssistant = aiAssistant;
+        _contextBuilder = contextBuilder;
 
         InitializeComponent();
         InitializeCustomComponents();
@@ -220,12 +232,22 @@ public partial class MainForm : Form
             _webViewPanel.NavigationFailed += OnNavigationFailed;
         }
 
-        if (_aiAssistantPanel != null)
+        // ⭐ NEW: Wire up AI panel
+        if (_aiAssistantPanel != null && _aiAssistant != null && _contextBuilder != null)
         {
+            _aiAssistantPanel.Initialize(_aiAssistant, _contextBuilder);
+            _aiAssistantPanel.OnHighlightRequested += OnHighlightTelemetryItems;
             _aiAssistantPanel.MessageSent += OnAIMessageSent;
         }
 
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+    }
+
+    // ⭐ NEW: Handle highlight request from AI
+    private void OnHighlightTelemetryItems(object? sender, List<Guid> ids)
+    {
+        // TODO: Implement highlighting in LogsDashboard
+        _logger?.LogInformation("AI requested highlighting {Count} telemetry items", ids.Count);
     }
 
     private async void MainForm_Load(object? sender, EventArgs e)
@@ -426,6 +448,9 @@ public partial class MainForm : Form
 
                 var session = await _sessionManager.CreateSessionAsync(sessionName, url);
                 _currentSessionId = session.Id;
+
+                // ⭐ NEW: Set AI panel context
+                _aiAssistantPanel?.SetContext(session.Id, ActiveTab.Console);
 
                 UpdateStatus($"Session created: {sessionName}");
                 UpdateSessionIndicator($"Session: {sessionName}");
