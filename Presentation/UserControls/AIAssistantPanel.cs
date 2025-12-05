@@ -1,3 +1,4 @@
+using AIDebugPro.Core.Models;
 using AIDebugPro.Presentation.ViewModels;
 
 namespace AIDebugPro.Presentation.UserControls;
@@ -257,9 +258,9 @@ public partial class AIAssistantPanel : UserControl
             // Color code by severity
             item.BackColor = issue.Severity switch
             {
-                Core.Models.IssueSeverity.Critical => Color.LightPink,
-                Core.Models.IssueSeverity.High => Color.LightSalmon,
-                Core.Models.IssueSeverity.Medium => Color.LightYellow,
+                IssueSeverity.Critical => Color.LightPink,
+                IssueSeverity.High => Color.LightSalmon,
+                IssueSeverity.Medium => Color.LightYellow,
                 _ => Color.White
             };
 
@@ -287,9 +288,9 @@ public partial class AIAssistantPanel : UserControl
             // Color code by priority
             item.BackColor = rec.Priority switch
             {
-                Core.Models.RecommendationPriority.Critical => Color.LightPink,
-                Core.Models.RecommendationPriority.High => Color.LightSalmon,
-                Core.Models.RecommendationPriority.Medium => Color.LightYellow,
+                RecommendationPriority.Critical => Color.LightPink,
+                RecommendationPriority.High => Color.LightSalmon,
+                RecommendationPriority.Medium => Color.LightYellow,
                 _ => Color.White
             };
 

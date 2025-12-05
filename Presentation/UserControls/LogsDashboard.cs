@@ -244,7 +244,7 @@ public partial class LogsDashboard : UserControl
         item.SubItems.Add(message.Level.ToString());
         item.SubItems.Add(message.Message);
         item.SubItems.Add(message.Source ?? "");
-        item.SubItems.Add(message.LineNumber.ToString() ?? "");
+        item.SubItems.Add(message.LineNumber.ToString());
 
         // Color code by level
         item.BackColor = message.Level switch
