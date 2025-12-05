@@ -125,6 +125,8 @@ public class NetworkListener : INetworkListener,IDisposable
     {
         try
         {
+            _logger?.LogDebug("?? Network request intercepted");
+            
             var json = JsonDocument.Parse(e.ParameterObjectAsJson);
             var root = json.RootElement;
 
@@ -162,7 +164,8 @@ public class NetworkListener : INetworkListener,IDisposable
 
             _requests[requestId] = builder;
 
-            _logger?.LogDebug("Request started: {Method} {Url}", builder.Method, builder.Url.Truncate(80));
+            _logger?.LogInformation("?? NETWORK REQUEST: {Method} {Url} (ID: {RequestId})", 
+                builder.Method, builder.Url.Truncate(80), requestId.Truncate(10));
         }
         catch (Exception ex)
         {

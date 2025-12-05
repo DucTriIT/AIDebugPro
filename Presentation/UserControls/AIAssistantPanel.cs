@@ -2,6 +2,8 @@ using AIDebugPro.Core.Models;
 using AIDebugPro.Presentation.ViewModels;
 using AIDebugPro.AIIntegration;
 using AIDebugPro.AIIntegration.Models;
+using AIDebugPro.Services.Utilities;
+using Microsoft.Extensions.Logging;
 
 namespace AIDebugPro.Presentation.UserControls;
 
@@ -21,12 +23,13 @@ public partial class AIAssistantPanel : UserControl
 
     private AIAssistantViewModel? _viewModel;
     
-    // ? NEW: AI Integration
+    // ? AI Integration
     private AIDebugAssistant? _aiAssistant;
     private TelemetryContextBuilder? _contextBuilder;
     private Guid? _currentSessionId;
     private ActiveTab _currentTab = ActiveTab.Console;
     private Label? _typingIndicator;
+    private ILogger<AIAssistantPanel>? _logger;
 
     #region Events
 
@@ -44,10 +47,14 @@ public partial class AIAssistantPanel : UserControl
     // ? NEW: Initialize with AI services
     public void Initialize(
         AIDebugAssistant aiAssistant,
-        TelemetryContextBuilder contextBuilder)
+        TelemetryContextBuilder contextBuilder,
+        ILogger<AIAssistantPanel>? logger = null)
     {
         _aiAssistant = aiAssistant;
         _contextBuilder = contextBuilder;
+        _logger = logger;
+        
+        _logger?.LogInformation("AIAssistantPanel initialized with AI services");
     }
 
     // ? NEW: Set current context
@@ -281,7 +288,13 @@ public partial class AIAssistantPanel : UserControl
 
         if (_aiAssistant == null || _contextBuilder == null)
         {
-            AddMessageToChat("AI Assistant not initialized", false);
+            AddMessageToChat("?? AI Assistant not initialized. Please create a session first.", false);
+            return;
+        }
+
+        if (!_currentSessionId.HasValue || _currentSessionId == Guid.Empty)
+        {
+            AddMessageToChat("?? No active session. Please create a session and start capture first.", false);
             return;
         }
 
@@ -297,24 +310,44 @@ public partial class AIAssistantPanel : UserControl
             ShowTypingIndicator(true);
 
             // Build telemetry context
+            _logger?.LogDebug("Building telemetry context for session {SessionId}", _currentSessionId);
             var context = await _contextBuilder.BuildContextAsync(
-                _currentSessionId ?? Guid.Empty,
+                _currentSessionId.Value,
                 _currentTab,
-                selectedItem: null // TODO: Get from MainForm if available
+                selectedItem: null
             );
 
+            _logger?.LogInformation("Context built: {Console} console, {Network} network msgs",
+                context.RecentConsoleMessages.Count, context.RecentNetworkRequests.Count);
+
             // Get AI response
+            _logger?.LogInformation("Calling AI with query: {Query}", userMessage.Truncate(50));
             var response = await _aiAssistant.AnalyzeAsync(userMessage, context);
 
             // Hide typing indicator
             ShowTypingIndicator(false);
 
+            // Check if we got a valid response
+            if (string.IsNullOrWhiteSpace(response.Message))
+            {
+                AddMessageToChat("?? AI returned an empty response. Please check your OpenAI API key and try again.", false);
+                _logger?.LogWarning("AI returned empty response");
+                return;
+            }
+
             // Add AI response
             AddMessageToChat(response.Message, isUser: false);
+
+            // Show severity if high or critical
+            if (response.Severity == IssueSeverity.High || response.Severity == IssueSeverity.Critical)
+            {
+                AddMessageToChat($"?? Severity: {response.Severity}", isUser: false);
+            }
 
             // Highlight related items
             if (response.RelatedTelemetryIds.Any())
             {
+                _logger?.LogDebug("Highlighting {Count} related items", response.RelatedTelemetryIds.Count);
                 OnHighlightRequested?.Invoke(this, response.RelatedTelemetryIds);
             }
 
@@ -324,7 +357,19 @@ public partial class AIAssistantPanel : UserControl
         catch (Exception ex)
         {
             ShowTypingIndicator(false);
-            AddMessageToChat($"Error: {ex.Message}", isUser: false);
+            _logger?.LogError(ex, "Error sending message to AI");
+            
+            var errorMsg = ex.InnerException != null 
+                ? $"Error: {ex.Message}\nDetails: {ex.InnerException.Message}" 
+                : $"Error: {ex.Message}";
+            
+            AddMessageToChat($"? {errorMsg}", isUser: false);
+            
+            // Check if it's an API key issue
+            if (ex.Message.Contains("401") || ex.Message.Contains("API key"))
+            {
+                AddMessageToChat("?? Tip: Make sure your OpenAI API key is set correctly in User Secrets", false);
+            }
         }
     }
 

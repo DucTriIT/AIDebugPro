@@ -19,6 +19,7 @@ public partial class MainForm : Form
     private readonly ITelemetryAggregator _telemetryAggregator;
     private readonly ILogger<MainForm>? _logger;
     private readonly MainViewModel _viewModel;
+    private readonly ILoggerFactory? _loggerFactory; // ⭐ NEW
 
     // User Controls
     private WebViewPanel? _webViewPanel;
@@ -41,14 +42,16 @@ public partial class MainForm : Form
         ISessionManager sessionManager,
         ITelemetryAggregator telemetryAggregator,
         MainViewModel viewModel,
-        AIDebugAssistant aiAssistant,           // ⭐ NEW
-        TelemetryContextBuilder contextBuilder,  // ⭐ NEW
+        AIDebugAssistant aiAssistant,
+        TelemetryContextBuilder contextBuilder,
+        ILoggerFactory loggerFactory, // ⭐ NEW
         ILogger<MainForm>? logger = null)
     {
         _sessionManager = sessionManager ?? throw new ArgumentNullException(nameof(sessionManager));
         _telemetryAggregator = telemetryAggregator ?? throw new ArgumentNullException(nameof(telemetryAggregator));
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _logger = logger;
+        _loggerFactory = loggerFactory; // ⭐ NEW
 
         // ⭐ NEW: Store AI services
         _aiAssistant = aiAssistant;
@@ -70,18 +73,7 @@ public partial class MainForm : Form
         this.StartPosition = FormStartPosition.CenterScreen;
         this.Icon = SystemIcons.Application;
 
-        // Create menu strip
-        CreateMenuStrip();
-
-        // Create toolbar
-        _commandToolbar = new CommandToolbar
-        {
-            Dock = DockStyle.Top,
-            Height = 50
-        };
-        this.Controls.Add(_commandToolbar);
-
-        // Create main split container
+        // ⭐ FIX: Create main split container FIRST (so menu doesn't overlay it)
         var mainSplitContainer = new SplitContainer
         {
             Dock = DockStyle.Fill,
@@ -89,7 +81,6 @@ public partial class MainForm : Form
             SplitterDistance = 550,
             FixedPanel = FixedPanel.None
         };
-        this.Controls.Add(mainSplitContainer);
 
         // Top section: Browser and AI Assistant
         var topSplitContainer = new SplitContainer
@@ -122,7 +113,21 @@ public partial class MainForm : Form
         };
         mainSplitContainer.Panel2.Controls.Add(_logsDashboard);
 
-        // Create status bar
+        // ⭐ FIX: Add main container first
+        this.Controls.Add(mainSplitContainer);
+
+        // ⭐ FIX: Then create toolbar (goes on top of split container)
+        _commandToolbar = new CommandToolbar
+        {
+            Dock = DockStyle.Top,
+            Height = 50
+        };
+        this.Controls.Add(_commandToolbar);
+
+        // ⭐ FIX: Then menu strip (goes on top of toolbar)
+        CreateMenuStrip();
+
+        // Create status bar (bottom)
         CreateStatusBar();
 
         _logger?.LogDebug("Custom components initialized");
@@ -235,7 +240,8 @@ public partial class MainForm : Form
         // ⭐ NEW: Wire up AI panel
         if (_aiAssistantPanel != null && _aiAssistant != null && _contextBuilder != null)
         {
-            _aiAssistantPanel.Initialize(_aiAssistant, _contextBuilder);
+            var aiPanelLogger = _loggerFactory?.CreateLogger<AIAssistantPanel>();
+            _aiAssistantPanel.Initialize(_aiAssistant, _contextBuilder, aiPanelLogger);
             _aiAssistantPanel.OnHighlightRequested += OnHighlightTelemetryItems;
             _aiAssistantPanel.MessageSent += OnAIMessageSent;
         }
